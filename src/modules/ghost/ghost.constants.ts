@@ -1,0 +1,1 @@
+export const GHOST_ADMIN_API = 'GHOST_ADMIN_API';
