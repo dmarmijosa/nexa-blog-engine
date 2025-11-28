@@ -21,17 +21,44 @@
   <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
   [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Description
+## Descripción del Proyecto
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+`nexa-blog-engine` es un motor de generación y publicación de contenido técnico automatizado. Combina:
 
-## Project setup
+- OpenAI (modelos GPT) para crear artículos técnicos extensos y estructurados.
+- Ghost CMS para almacenar los artículos como borradores (o publicarlos luego manualmente).
+- NestJS como framework para organizar la arquitectura en módulos limpios.
+
+El flujo principal: El cliente envía un `topic` -> Se genera un artículo largo con título, excerpt, tags y HTML semántico -> Se envía a Ghost como borrador.
+
+> Nota: La generación de contenido puede tardar entre 20–60 segundos dependiendo del modelo y complejidad del tema.
+
+## Requisitos Previos
+
+1. Node.js 18+ instalado
+2. Cuenta y sitio Ghost funcionando (self-host o Ghost(Pro))
+3. Clave Admin de Ghost (Formato `<id>:<secret>`)
+4. Clave de OpenAI (`OPENAI_API_KEY`)
+
+## Configuración del Proyecto
 
 ```bash
 $ npm install
 ```
 
-## Compile and run the project
+### Variables de Entorno
+
+Crear un archivo `.env` en la raíz con:
+
+```bash
+GHOST_URL=https://tu-sitio-ghost.com
+GHOST_ADMIN_KEY=XXXXXXXX:XXXXXXXXXXXXXXXXXXXXXXXX
+OPENAI_API_KEY=sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+Validación: El archivo `src/config/env.validation.ts` asegura que `GHOST_URL`, `GHOST_ADMIN_KEY` y `OPENAI_API_KEY` existan y tengan formato correcto al arrancar.
+
+### Compilar y Ejecutar
 
 ```bash
 # development
@@ -44,7 +71,77 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
-## Run tests
+## Arquitectura
+
+| Módulo | Propósito | Exporta |
+|--------|-----------|---------|
+| `GhostModule` | Provee cliente Admin de Ghost via token DI y servicio para crear posts | `GHOST_ADMIN_API`, `GhostService` |
+| `OpenaiModule` | Encapsula llamadas a OpenAI y generación del artículo | `OpenaiService` |
+| `ContentModule` | Orquesta el flujo: generar con OpenAI y publicar en Ghost | Controlador `ContentController` |
+| `AppModule` | Módulo raíz, carga configuración global y módulos de negocio | — |
+
+### Flujo Interno
+1. `ContentController.POST /content/generate` recibe `{ topic }`.
+2. `OpenaiService.generateTechnicalPost(topic)` crea JSON tipado (`title`, `excerpt`, `tags`, `contentHtml`).
+3. Se post-procesa HTML para añadir clases de lenguaje a `<code>`.
+4. `GhostService.createPost(...)` envía el borrador a Ghost.
+5. Respuesta al cliente incluye `ghostId`, `url`, `title`, `tags`.
+
+### Token y DI
+Para evitar dependencias circulares el token `GHOST_ADMIN_API` vive en `src/modules/ghost/ghost.constants.ts` y se inyecta en `GhostService`.
+
+## Endpoints Principales
+
+### 1. Health / Ejemplo de integración
+`GET /test-deploy` – Genera un post de prueba y devuelve metadatos.
+
+### 2. Generar y publicar (borrador)
+`POST /content/generate`
+
+Body JSON:
+```json
+{
+  "topic": "Cómo usar Interceptors en NestJS"
+}
+```
+
+Respuesta (ejemplo):
+```json
+{
+  "success": true,
+  "message": "Artículo generado y enviado a borrador",
+  "data": {
+    "ghostId": "675f2c7d8e4c",
+    "url": "https://tu-sitio-ghost.com/p/slug/",
+    "title": "Interceptors avanzados en NestJS: Diseño y mejores prácticas",
+    "tags": ["NestJS", "Interceptors", "Arquitectura", "Backend", "TypeScript"]
+  }
+}
+```
+
+### Ejemplo curl
+```bash
+curl -X POST http://localhost:3000/content/generate \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"Optimización de señales en Angular 18"}'
+```
+
+## Estándares Aplicados
+
+- Validación: DTO `CreatePostDto` con `class-validator`.
+- Config: Nunca acceder directamente a `process.env`; se usa `ConfigService`.
+- OpenAI: Respuesta forzada a JSON mediante `response_format` y esquema estricto.
+- Ghost: Publicación inicial como `draft` para revisión manual.
+- HTML: Se fuerza `class="language-typescript"` en bloques `<code>` para mejor highlighting.
+
+## Errores Comunes
+
+- 401 Ghost: Revisar `GHOST_ADMIN_KEY` y permisos Admin.
+- 400 OpenAI: Verificar cuota y `OPENAI_API_KEY` válida.
+- Tiempo de espera: El endpoint puede tardar; considerar timeout del cliente > 60s.
+- Dependencia circular: Ya resuelto moviendo el token a `ghost.constants.ts`.
+
+## Testing
 
 ```bash
 # unit tests
@@ -57,31 +154,38 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
-## Deployment
+## Deploy / Producción
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Recomendaciones:
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+1. Usar imágenes Docker multistage (Node 20 Alpine) y establecer `NODE_ENV=production`.
+2. Asegurar variables de entorno en el entorno de orquestación (Docker, Kubernetes, etc.).
+3. Añadir capa de autenticación / API Key antes de exponer `POST /content/generate` públicamente.
+4. Monitorizar tiempo de respuesta y añadir cola/asíncronía si el volumen crece.
 
+### Comandos básicos Docker (ejemplo)
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+docker build -t nexa-blog-engine .
+docker run -p 3000:3000 --env-file .env nexa-blog-engine
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Futuras Mejoras
 
-## Resources
+- Autenticación JWT / API Key para proteger endpoints.
+- Soporte de publicación directa (`status: published`).
+- Programación de posts (scheduled publish).
+- Indexado en motor de búsqueda interno.
+- Cache de prompts y reutilización.
 
-Check out a few resources that may come in handy when working with NestJS:
+## Recursos
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+- NestJS Docs: https://docs.nestjs.com
+- Ghost Admin API: https://ghost.org/docs/admin-api/
+- OpenAI API: https://platform.openai.com/docs
+
+## Licencia
+
+MIT
 
 ## Support
 
